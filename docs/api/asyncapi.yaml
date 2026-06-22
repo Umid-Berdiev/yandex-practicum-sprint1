@@ -1,0 +1,551 @@
+asyncapi: "2.6.0"
+info:
+  title: Smart Home Event Bus
+  version: "1.0.0"
+  description: |
+    AsyncAPI-спецификация для асинхронного взаимодействия микросервисов
+    умного дома через Apache Kafka.
+
+    **Топики:**
+    | Топик | Producer | Consumer(s) |
+    |---|---|---|
+    | `device.created` | Device Management | Heating Control, Temperature Monitoring |
+    | `device.updated` | Device Management | Heating Control, Temperature Monitoring |
+    | `heating.turned_on` | Heating Control | Device Management |
+    | `heating.turned_off` | Heating Control | Device Management |
+    | `temperature.reading` | Temperature Monitoring | (аналитика, будущее) |
+    | `temperature.alert` | Temperature Monitoring | (нотификации, будущее) |
+
+defaultContentType: application/json
+
+servers:
+  production:
+    url: kafka.smarthome.example.com:9092
+    protocol: kafka
+    description: Production Kafka cluster
+  development:
+    url: localhost:9092
+    protocol: kafka
+    description: Local Kafka (docker-compose)
+
+# ══════════════════════════════════════════════════════════════
+# CHANNELS (Kafka topics)
+# ══════════════════════════════════════════════════════════════
+channels:
+  device.created:
+    description: |
+      Публикуется Device Management Service при успешной регистрации
+      нового устройства. Consumers (Heating Control, Temperature Monitoring)
+      используют это событие для регистрации устройства в своих реестрах.
+    publish:
+      operationId: publishDeviceCreated
+      summary: Новое устройство зарегистрировано
+      tags:
+        - name: Device Management
+      message:
+        $ref: "#/components/messages/DeviceCreatedEvent"
+    subscribe:
+      operationId: consumeDeviceCreated
+      summary: Получить событие о новом устройстве
+      tags:
+        - name: Heating Control
+        - name: Temperature Monitoring
+      message:
+        $ref: "#/components/messages/DeviceCreatedEvent"
+    bindings:
+      kafka:
+        topic: device.created
+        partitions: 3
+        replicas: 2
+
+  device.updated:
+    description: |
+      Публикуется Device Management Service при изменении атрибутов
+      или статуса устройства.
+    publish:
+      operationId: publishDeviceUpdated
+      summary: Устройство обновлено
+      tags:
+        - name: Device Management
+      message:
+        $ref: "#/components/messages/DeviceUpdatedEvent"
+    subscribe:
+      operationId: consumeDeviceUpdated
+      summary: Получить событие об обновлении устройства
+      tags:
+        - name: Heating Control
+        - name: Temperature Monitoring
+      message:
+        $ref: "#/components/messages/DeviceUpdatedEvent"
+    bindings:
+      kafka:
+        topic: device.updated
+        partitions: 3
+        replicas: 2
+
+  heating.turned_on:
+    description: |
+      Публикуется Heating Control Service после успешного выполнения
+      команды включения отопления. Device Management потребляет
+      событие для синхронизации статуса устройства.
+    publish:
+      operationId: publishHeatingTurnedOn
+      summary: Отопление включено
+      tags:
+        - name: Heating Control
+      message:
+        $ref: "#/components/messages/HeatingTurnedOnEvent"
+    subscribe:
+      operationId: consumeHeatingTurnedOn
+      summary: Синхронизировать статус устройства
+      tags:
+        - name: Device Management
+      message:
+        $ref: "#/components/messages/HeatingTurnedOnEvent"
+    bindings:
+      kafka:
+        topic: heating.turned_on
+        partitions: 3
+        replicas: 2
+
+  heating.turned_off:
+    description: |
+      Публикуется Heating Control Service после успешного выполнения
+      команды выключения отопления.
+    publish:
+      operationId: publishHeatingTurnedOff
+      summary: Отопление выключено
+      tags:
+        - name: Heating Control
+      message:
+        $ref: "#/components/messages/HeatingTurnedOffEvent"
+    subscribe:
+      operationId: consumeHeatingTurnedOff
+      summary: Синхронизировать статус устройства
+      tags:
+        - name: Device Management
+      message:
+        $ref: "#/components/messages/HeatingTurnedOffEvent"
+    bindings:
+      kafka:
+        topic: heating.turned_off
+        partitions: 3
+        replicas: 2
+
+  temperature.reading:
+    description: |
+      Публикуется Temperature Monitoring Service при каждом успешном
+      получении показания с датчика (результат polling External Temperature API).
+      Может быть использован будущими аналитическими сервисами.
+    publish:
+      operationId: publishTemperatureReading
+      summary: Новое показание температуры
+      tags:
+        - name: Temperature Monitoring
+      message:
+        $ref: "#/components/messages/TemperatureReadingEvent"
+    bindings:
+      kafka:
+        topic: temperature.reading
+        partitions: 6
+        replicas: 2
+
+  temperature.alert:
+    description: |
+      Публикуется Temperature Monitoring Service при выходе показания
+      температуры за допустимые пороговые значения (< 18°C или > 30°C).
+      Будущий Notification Service будет потреблять этот топик.
+    publish:
+      operationId: publishTemperatureAlert
+      summary: Алерт по температуре
+      tags:
+        - name: Temperature Monitoring
+      message:
+        $ref: "#/components/messages/TemperatureAlertEvent"
+    bindings:
+      kafka:
+        topic: temperature.alert
+        partitions: 3
+        replicas: 2
+
+# ══════════════════════════════════════════════════════════════
+# COMPONENTS
+# ══════════════════════════════════════════════════════════════
+components:
+  messages:
+    DeviceCreatedEvent:
+      name: DeviceCreatedEvent
+      title: Device Created
+      contentType: application/json
+      headers:
+        type: object
+        properties:
+          event_id:
+            type: string
+            format: uuid
+            description: Уникальный ID события (идемпотентность)
+          event_type:
+            type: string
+            const: device.created
+          source:
+            type: string
+            const: device-management-service
+          timestamp:
+            type: string
+            format: date-time
+      payload:
+        $ref: "#/components/schemas/DeviceCreatedPayload"
+      examples:
+        - name: Новый термостат
+          headers:
+            event_id: "e1a2b3c4-d5e6-7890-abcd-ef1234567890"
+            event_type: "device.created"
+            source: "device-management-service"
+            timestamp: "2026-06-22T14:00:00Z"
+          payload:
+            device_id: "550e8400-e29b-41d4-a716-446655440000"
+            name: "Термостат гостиной"
+            type_id: "7d2b3c1e-f1a2-4b56-8c9d-0e1f2a3b4c5d"
+            type_category: "thermostat"
+            house_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+            location: "living_room"
+            serial_number: "TH-2024-001"
+            status: "inactive"
+
+    DeviceUpdatedEvent:
+      name: DeviceUpdatedEvent
+      title: Device Updated
+      contentType: application/json
+      headers:
+        type: object
+        properties:
+          event_id:
+            type: string
+            format: uuid
+          event_type:
+            type: string
+            const: device.updated
+          source:
+            type: string
+            const: device-management-service
+          timestamp:
+            type: string
+            format: date-time
+      payload:
+        $ref: "#/components/schemas/DeviceUpdatedPayload"
+      examples:
+        - name: Смена статуса на maintenance
+          headers:
+            event_id: "f2b3c4d5-e6f7-8901-bcde-f12345678901"
+            event_type: "device.updated"
+            source: "device-management-service"
+            timestamp: "2026-06-22T15:00:00Z"
+          payload:
+            device_id: "550e8400-e29b-41d4-a716-446655440000"
+            changed_fields:
+              - status
+            previous:
+              status: "active"
+            current:
+              status: "maintenance"
+
+    HeatingTurnedOnEvent:
+      name: HeatingTurnedOnEvent
+      title: Heating Turned On
+      contentType: application/json
+      headers:
+        type: object
+        properties:
+          event_id:
+            type: string
+            format: uuid
+          event_type:
+            type: string
+            const: heating.turned_on
+          source:
+            type: string
+            const: heating-control-service
+          timestamp:
+            type: string
+            format: date-time
+      payload:
+        $ref: "#/components/schemas/HeatingCommandPayload"
+      examples:
+        - name: Включение отопления в гостиной
+          headers:
+            event_id: "a1b2c3d4-e5f6-7890-1234-567890abcdef"
+            event_type: "heating.turned_on"
+            source: "heating-control-service"
+            timestamp: "2026-06-22T08:00:00Z"
+          payload:
+            device_id: "550e8400-e29b-41d4-a716-446655440000"
+            command_id: "cmd-abc123"
+            house_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+            location: "living_room"
+            state: "on"
+            target_temperature: 22.5
+            issued_by: "user-uuid-0001"
+
+    HeatingTurnedOffEvent:
+      name: HeatingTurnedOffEvent
+      title: Heating Turned Off
+      contentType: application/json
+      headers:
+        type: object
+        properties:
+          event_id:
+            type: string
+            format: uuid
+          event_type:
+            type: string
+            const: heating.turned_off
+          source:
+            type: string
+            const: heating-control-service
+          timestamp:
+            type: string
+            format: date-time
+      payload:
+        $ref: "#/components/schemas/HeatingCommandPayload"
+      examples:
+        - name: Выключение отопления
+          headers:
+            event_id: "b2c3d4e5-f6a7-8901-2345-678901bcdef0"
+            event_type: "heating.turned_off"
+            source: "heating-control-service"
+            timestamp: "2026-06-22T22:00:00Z"
+          payload:
+            device_id: "550e8400-e29b-41d4-a716-446655440000"
+            command_id: "cmd-def456"
+            house_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+            location: "living_room"
+            state: "off"
+            target_temperature: null
+            issued_by: "user-uuid-0001"
+
+    TemperatureReadingEvent:
+      name: TemperatureReadingEvent
+      title: Temperature Reading
+      contentType: application/json
+      headers:
+        type: object
+        properties:
+          event_id:
+            type: string
+            format: uuid
+          event_type:
+            type: string
+            const: temperature.reading
+          source:
+            type: string
+            const: temperature-monitoring-service
+          timestamp:
+            type: string
+            format: date-time
+      payload:
+        $ref: "#/components/schemas/TemperatureReadingPayload"
+      examples:
+        - name: Показание в норме
+          headers:
+            event_id: "c3d4e5f6-a7b8-9012-3456-789012cdef01"
+            event_type: "temperature.reading"
+            source: "temperature-monitoring-service"
+            timestamp: "2026-06-22T14:30:00Z"
+          payload:
+            device_id: "550e8400-e29b-41d4-a716-446655440000"
+            sensor_id: "ext-sensor-007"
+            house_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+            location: "living_room"
+            value: 22.5
+            unit: "°C"
+            status: "ok"
+            recorded_at: "2026-06-22T14:29:55Z"
+
+    TemperatureAlertEvent:
+      name: TemperatureAlertEvent
+      title: Temperature Alert
+      contentType: application/json
+      headers:
+        type: object
+        properties:
+          event_id:
+            type: string
+            format: uuid
+          event_type:
+            type: string
+            const: temperature.alert
+          source:
+            type: string
+            const: temperature-monitoring-service
+          severity:
+            type: string
+            enum: [warning, critical]
+          timestamp:
+            type: string
+            format: date-time
+      payload:
+        $ref: "#/components/schemas/TemperatureAlertPayload"
+      examples:
+        - name: Низкая температура (warning)
+          headers:
+            event_id: "d4e5f6a7-b8c9-0123-4567-890123def012"
+            event_type: "temperature.alert"
+            source: "temperature-monitoring-service"
+            severity: "warning"
+            timestamp: "2026-06-22T03:15:00Z"
+          payload:
+            alert_id: "alert-uuid-001"
+            device_id: "550e8400-e29b-41d4-a716-446655440000"
+            house_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+            location: "bedroom"
+            alert_type: "temperature_low"
+            value: 16.5
+            threshold: 18.0
+            unit: "°C"
+            message: "Temperature in bedroom dropped below 18°C"
+            triggered_at: "2026-06-22T03:15:00Z"
+
+  schemas:
+    DeviceCreatedPayload:
+      type: object
+      required:
+        [device_id, name, type_id, house_id, location, serial_number, status]
+      properties:
+        device_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type_id:
+          type: string
+          format: uuid
+        type_category:
+          type: string
+          enum: [sensor, actuator, thermostat]
+        house_id:
+          type: string
+          format: uuid
+        location:
+          type: string
+        serial_number:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive, error, maintenance]
+
+    DeviceUpdatedPayload:
+      type: object
+      required: [device_id, changed_fields, previous, current]
+      properties:
+        device_id:
+          type: string
+          format: uuid
+        changed_fields:
+          type: array
+          items:
+            type: string
+          description: Список изменённых полей
+        previous:
+          type: object
+          description: Значения до изменения
+        current:
+          type: object
+          description: Значения после изменения
+
+    HeatingCommandPayload:
+      type: object
+      required: [device_id, command_id, house_id, location, state]
+      properties:
+        device_id:
+          type: string
+          format: uuid
+        command_id:
+          type: string
+          description: ID записи в журнале команд
+        house_id:
+          type: string
+          format: uuid
+        location:
+          type: string
+        state:
+          type: string
+          enum: [on, off]
+        target_temperature:
+          type: number
+          format: float
+          nullable: true
+        issued_by:
+          type: string
+          format: uuid
+          description: UUID пользователя, выдавшего команду
+
+    TemperatureReadingPayload:
+      type: object
+      required: [device_id, location, value, unit, recorded_at]
+      properties:
+        device_id:
+          type: string
+          format: uuid
+        sensor_id:
+          type: string
+          description: ID датчика во внешней системе
+        house_id:
+          type: string
+          format: uuid
+        location:
+          type: string
+        value:
+          type: number
+          format: float
+        unit:
+          type: string
+          example: "°C"
+        status:
+          type: string
+          enum: [ok, warning, critical]
+        recorded_at:
+          type: string
+          format: date-time
+
+    TemperatureAlertPayload:
+      type: object
+      required:
+        [
+          alert_id,
+          device_id,
+          house_id,
+          location,
+          alert_type,
+          value,
+          threshold,
+          triggered_at,
+        ]
+      properties:
+        alert_id:
+          type: string
+          format: uuid
+        device_id:
+          type: string
+          format: uuid
+        house_id:
+          type: string
+          format: uuid
+        location:
+          type: string
+        alert_type:
+          type: string
+          enum: [temperature_high, temperature_low, device_offline, error]
+        value:
+          type: number
+          format: float
+        threshold:
+          type: number
+          format: float
+        unit:
+          type: string
+          example: "°C"
+        message:
+          type: string
+        triggered_at:
+          type: string
+          format: date-time

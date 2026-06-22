@@ -1,0 +1,182 @@
+@startuml ER_SmartHome
+skinparam linetype ortho
+skinparam classFontSize 13
+skinparam classAttributeFontSize 12
+skinparam shadowing false
+skinparam class {
+    BackgroundColor #FAFAFA
+    BorderColor #555555
+    HeaderBackgroundColor #D0E8FF
+}
+
+title ER-диаграмма — Smart Home System
+
+' ══════════════════════════════════════════
+' Сущности
+' ══════════════════════════════════════════
+
+entity "User\n(Пользователь)" as User {
+    * id : UUID <<PK>>
+    --
+    * email : VARCHAR(255) <<UNIQUE>>
+    * password_hash : VARCHAR(255)
+    * first_name : VARCHAR(100)
+    * last_name : VARCHAR(100)
+    * phone : VARCHAR(20)
+    * role : ENUM('owner','admin','guest')
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+}
+
+entity "House\n(Дом)" as House {
+    * id : UUID <<PK>>
+    --
+    * owner_id : UUID <<FK→User>>
+    * name : VARCHAR(100)
+    * address : TEXT
+    * city : VARCHAR(100)
+    * timezone : VARCHAR(50)
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+}
+
+entity "UserHouseAccess\n(Доступ к дому)" as UserHouseAccess {
+    * id : UUID <<PK>>
+    --
+    * user_id : UUID <<FK→User>>
+    * house_id : UUID <<FK→House>>
+    * access_level : ENUM('read','control','admin')
+    * granted_at : TIMESTAMPTZ
+}
+
+entity "DeviceType\n(Тип устройства)" as DeviceType {
+    * id : UUID <<PK>>
+    --
+    * name : VARCHAR(100) <<UNIQUE>>
+    * category : ENUM('sensor','actuator','thermostat')
+    * manufacturer : VARCHAR(100)
+    * model : VARCHAR(100)
+    * description : TEXT
+    * created_at : TIMESTAMPTZ
+}
+
+entity "Device\n(Устройство)" as Device {
+    * id : UUID <<PK>>
+    --
+    * type_id : UUID <<FK→DeviceType>>
+    * house_id : UUID <<FK→House>>
+    * name : VARCHAR(100)
+    * serial_number : VARCHAR(100) <<UNIQUE>>
+    * location : VARCHAR(100)
+    * status : ENUM('active','inactive','error','maintenance')
+    * firmware_version : VARCHAR(50)
+    * installed_at : TIMESTAMPTZ
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+}
+
+entity "Module\n(Модуль)" as Module {
+    * id : UUID <<PK>>
+    --
+    * device_id : UUID <<FK→Device>>
+    * name : VARCHAR(100)
+    * type : ENUM('heating','temperature_sensor','humidity_sensor')
+    * is_enabled : BOOLEAN
+    * config : JSONB
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+}
+
+entity "HeatingSchedule\n(Расписание отопления)" as HeatingSchedule {
+    * id : UUID <<PK>>
+    --
+    * module_id : UUID <<FK→Module>>
+    * name : VARCHAR(100)
+    * cron_expression : VARCHAR(100)
+    * target_temperature : DECIMAL(5,2)
+    * is_active : BOOLEAN
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+}
+
+entity "HeatingCommand\n(Журнал команд)" as HeatingCommand {
+    * id : UUID <<PK>>
+    --
+    * module_id : UUID <<FK→Module>>
+    * issued_by : UUID <<FK→User>>
+    * command : ENUM('turn_on','turn_off','set_temperature')
+    * payload : JSONB
+    * status : ENUM('pending','executed','failed')
+    * executed_at : TIMESTAMPTZ
+    * created_at : TIMESTAMPTZ
+}
+
+entity "TelemetryData\n(Телеметрия)" as TelemetryData {
+    * id : UUID <<PK>>
+    --
+    * device_id : UUID <<FK→Device>>
+    * module_id : UUID <<FK→Module>>
+    * metric : VARCHAR(50)
+    * value : DECIMAL(10,4)
+    * unit : VARCHAR(20)
+    * recorded_at : TIMESTAMPTZ <<partition key>>
+    --
+    ' Hypertable по recorded_at (TimescaleDB)
+}
+
+entity "Alert\n(Алерт)" as Alert {
+    * id : UUID <<PK>>
+    --
+    * device_id : UUID <<FK→Device>>
+    * module_id : UUID <<FK→Module>>
+    * type : ENUM('temperature_high','temperature_low','device_offline','error')
+    * message : TEXT
+    * value : DECIMAL(10,4)
+    * threshold : DECIMAL(10,4)
+    * is_resolved : BOOLEAN
+    * triggered_at : TIMESTAMPTZ
+    * resolved_at : TIMESTAMPTZ
+}
+
+' ══════════════════════════════════════════
+' Связи
+' ══════════════════════════════════════════
+
+' User — House (владелец)
+User ||--o{ House : "владеет\n(owner_id)"
+
+' User — House (доступ, many-to-many через UserHouseAccess)
+User ||--o{ UserHouseAccess : "имеет доступ"
+House ||--o{ UserHouseAccess : "предоставляет доступ"
+
+' House — Device
+House ||--o{ Device : "содержит\n(house_id)"
+
+' DeviceType — Device
+DeviceType ||--o{ Device : "классифицирует\n(type_id)"
+
+' Device — Module
+Device ||--o{ Module : "включает\n(device_id)"
+
+' Module — HeatingSchedule
+Module ||--o{ HeatingSchedule : "выполняет по расписанию\n(module_id)"
+
+' Module — HeatingCommand
+Module ||--o{ HeatingCommand : "получает команды\n(module_id)"
+
+' User — HeatingCommand (кто выдал команду)
+User ||--o{ HeatingCommand : "выдаёт команды\n(issued_by)"
+
+' Device — TelemetryData
+Device ||--o{ TelemetryData : "генерирует\n(device_id)"
+
+' Module — TelemetryData
+Module ||--o{ TelemetryData : "генерирует\n(module_id)"
+
+' Device — Alert
+Device ||--o{ Alert : "вызывает\n(device_id)"
+
+' Module — Alert
+Module ||--o{ Alert : "вызывает\n(module_id)"
+
+@enduml

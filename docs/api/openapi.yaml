@@ -1,0 +1,823 @@
+openapi: "3.0.3"
+info:
+  title: Smart Home API
+  version: "1.0.0"
+  description: |
+    REST API для экосистемы умного дома.
+    Покрывает три микросервиса:
+    - **Device Management Service** — управление устройствами и датчиками
+    - **Heating Control Service** — управление отоплением
+    - **Temperature Monitoring Service** — мониторинг температуры
+
+    Все запросы проходят через **API Gateway** (маршрутизация + JWT-аутентификация).
+  contact:
+    name: Smart Home Team
+
+servers:
+  - url: https://api.smarthome.example.com/api/v1
+    description: Production
+  - url: http://localhost:8080/api/v1
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Devices
+    description: Управление устройствами (Device Management Service)
+  - name: Heating
+    description: Управление отоплением (Heating Control Service)
+  - name: Temperature
+    description: Мониторинг температуры (Temperature Monitoring Service)
+
+# ══════════════════════════════════════════════════════════════
+# PATHS
+# ══════════════════════════════════════════════════════════════
+paths:
+  # ── Device Management ──────────────────────────────────────
+
+  /devices:
+    get:
+      tags: [Devices]
+      summary: Получить список устройств
+      description: Возвращает список всех устройств, доступных пользователю (фильтрация по дому).
+      operationId: listDevices
+      parameters:
+        - name: house_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: Фильтр по дому
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/DeviceStatus"
+          description: Фильтр по статусу
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - name: per_page
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Список устройств
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceListResponse"
+              example:
+                data:
+                  - id: "550e8400-e29b-41d4-a716-446655440000"
+                    name: "Термостат гостиной"
+                    type:
+                      id: "7d2b3c1e-f1a2-4b56-8c9d-0e1f2a3b4c5d"
+                      name: "Smart Thermostat"
+                      category: "thermostat"
+                    house_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                    location: "living_room"
+                    serial_number: "TH-2024-001"
+                    status: "active"
+                    firmware_version: "2.1.0"
+                    installed_at: "2024-01-15T10:00:00Z"
+                pagination:
+                  page: 1
+                  per_page: 20
+                  total: 1
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      tags: [Devices]
+      summary: Зарегистрировать новое устройство
+      description: Создаёт новое устройство в системе и публикует событие `device.created` в Kafka.
+      operationId: createDevice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceCreateRequest"
+            example:
+              name: "Термостат спальни"
+              type_id: "7d2b3c1e-f1a2-4b56-8c9d-0e1f2a3b4c5d"
+              house_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+              location: "bedroom"
+              serial_number: "TH-2024-002"
+              firmware_version: "2.1.0"
+      responses:
+        "201":
+          description: Устройство создано
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+              example:
+                id: "660f9511-f30c-52e5-b827-557766551111"
+                name: "Термостат спальни"
+                type:
+                  id: "7d2b3c1e-f1a2-4b56-8c9d-0e1f2a3b4c5d"
+                  name: "Smart Thermostat"
+                  category: "thermostat"
+                house_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                location: "bedroom"
+                serial_number: "TH-2024-002"
+                status: "inactive"
+                firmware_version: "2.1.0"
+                installed_at: "2026-06-22T12:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Конфликт — устройство с таким serial_number уже существует
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "DEVICE_ALREADY_EXISTS"
+                message: "Device with serial number TH-2024-002 already exists"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /devices/{id}:
+    get:
+      tags: [Devices]
+      summary: Получить устройство по ID
+      operationId: getDevice
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Информация об устройстве
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+              example:
+                id: "550e8400-e29b-41d4-a716-446655440000"
+                name: "Термостат гостиной"
+                type:
+                  id: "7d2b3c1e-f1a2-4b56-8c9d-0e1f2a3b4c5d"
+                  name: "Smart Thermostat"
+                  category: "thermostat"
+                house_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                location: "living_room"
+                serial_number: "TH-2024-001"
+                status: "active"
+                firmware_version: "2.1.0"
+                installed_at: "2024-01-15T10:00:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /devices/{id}/status:
+    patch:
+      tags: [Devices]
+      summary: Обновить статус устройства
+      description: |
+        Изменяет статус устройства (active / inactive / maintenance).
+        После успешного обновления публикует событие `device.updated` в Kafka.
+      operationId: updateDeviceStatus
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceStatusUpdateRequest"
+            example:
+              status: "maintenance"
+              reason: "Плановое обслуживание"
+      responses:
+        "200":
+          description: Статус обновлён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: Недопустимый переход статуса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "INVALID_STATUS_TRANSITION"
+                message: "Cannot transition from 'error' to 'active' directly"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ── Heating Control ────────────────────────────────────────
+
+  /heating/{device_id}/on:
+    post:
+      tags: [Heating]
+      summary: Включить отопление
+      description: |
+        Отправляет команду включения отопительного устройства.
+        После выполнения публикует событие `heating.turned_on` в Kafka.
+      operationId: turnOnHeating
+      parameters:
+        - $ref: "#/components/parameters/HeatingDeviceId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HeatingCommandRequest"
+            example:
+              target_temperature: 22.5
+      responses:
+        "200":
+          description: Отопление включено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HeatingStatusResponse"
+              example:
+                device_id: "550e8400-e29b-41d4-a716-446655440000"
+                state: "on"
+                target_temperature: 22.5
+                command_id: "cmd-abc123"
+                updated_at: "2026-06-22T14:30:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Отопление уже включено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "ALREADY_ON"
+                message: "Heating device is already turned on"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /heating/{device_id}/off:
+    post:
+      tags: [Heating]
+      summary: Выключить отопление
+      description: |
+        Отправляет команду выключения отопительного устройства.
+        После выполнения публикует событие `heating.turned_off` в Kafka.
+      operationId: turnOffHeating
+      parameters:
+        - $ref: "#/components/parameters/HeatingDeviceId"
+      responses:
+        "200":
+          description: Отопление выключено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HeatingStatusResponse"
+              example:
+                device_id: "550e8400-e29b-41d4-a716-446655440000"
+                state: "off"
+                target_temperature: null
+                command_id: "cmd-def456"
+                updated_at: "2026-06-22T15:00:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Отопление уже выключено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "ALREADY_OFF"
+                message: "Heating device is already turned off"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /heating/{device_id}/status:
+    get:
+      tags: [Heating]
+      summary: Получить статус отопления
+      operationId: getHeatingStatus
+      parameters:
+        - $ref: "#/components/parameters/HeatingDeviceId"
+      responses:
+        "200":
+          description: Текущее состояние отопительного устройства
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HeatingStatusResponse"
+              example:
+                device_id: "550e8400-e29b-41d4-a716-446655440000"
+                state: "on"
+                target_temperature: 22.5
+                current_temperature: 21.3
+                command_id: "cmd-abc123"
+                updated_at: "2026-06-22T14:30:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ── Temperature Monitoring ─────────────────────────────────
+
+  /temperature/{location}:
+    get:
+      tags: [Temperature]
+      summary: Получить текущую температуру по местоположению
+      description: Возвращает последнее сохранённое показание температуры из локальной TimescaleDB.
+      operationId: getCurrentTemperature
+      parameters:
+        - name: location
+          in: path
+          required: true
+          schema:
+            type: string
+            example: living_room
+          description: Название комнаты / зоны (например, living_room, bedroom)
+      responses:
+        "200":
+          description: Текущие показания температуры
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemperatureReading"
+              example:
+                device_id: "550e8400-e29b-41d4-a716-446655440000"
+                location: "living_room"
+                value: 22.5
+                unit: "°C"
+                status: "ok"
+                recorded_at: "2026-06-22T14:29:55Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Нет данных для указанного местоположения
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "LOCATION_NOT_FOUND"
+                message: "No temperature data found for location: kitchen"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /temperature/history/{device_id}:
+    get:
+      tags: [Temperature]
+      summary: Получить историю показаний температуры
+      operationId: getTemperatureHistory
+      parameters:
+        - name: device_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: Начало периода (ISO 8601)
+          example: "2026-06-22T00:00:00Z"
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Конец периода (ISO 8601, по умолчанию — текущее время)
+        - name: interval
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [raw, 1m, 5m, 1h, 1d]
+            default: raw
+          description: Агрегация по временному интервалу (TimescaleDB time_bucket)
+      responses:
+        "200":
+          description: История показаний
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemperatureHistoryResponse"
+              example:
+                device_id: "550e8400-e29b-41d4-a716-446655440000"
+                location: "living_room"
+                interval: "5m"
+                data:
+                  - bucket: "2026-06-22T14:00:00Z"
+                    avg: 22.4
+                    min: 21.9
+                    max: 22.8
+                    unit: "°C"
+                  - bucket: "2026-06-22T14:05:00Z"
+                    avg: 22.5
+                    min: 22.1
+                    max: 22.9
+                    unit: "°C"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /temperature/alerts:
+    get:
+      tags: [Temperature]
+      summary: Получить активные алерты по температуре
+      operationId: getTemperatureAlerts
+      parameters:
+        - name: house_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: is_resolved
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Список алертов
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Alert"
+              example:
+                data:
+                  - id: "alert-001"
+                    device_id: "550e8400-e29b-41d4-a716-446655440000"
+                    location: "bedroom"
+                    type: "temperature_low"
+                    message: "Temperature dropped below 18°C"
+                    value: 16.5
+                    threshold: 18.0
+                    is_resolved: false
+                    triggered_at: "2026-06-22T03:15:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+# ══════════════════════════════════════════════════════════════
+# COMPONENTS
+# ══════════════════════════════════════════════════════════════
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    DeviceId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: UUID устройства
+    HeatingDeviceId:
+      name: device_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: UUID отопительного устройства
+
+  responses:
+    BadRequest:
+      description: Некорректный запрос
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "BAD_REQUEST"
+            message: "Invalid request body"
+    Unauthorized:
+      description: Не аутентифицирован
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "UNAUTHORIZED"
+            message: "Bearer token is missing or invalid"
+    NotFound:
+      description: Ресурс не найден
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "NOT_FOUND"
+            message: "Resource not found"
+    InternalError:
+      description: Внутренняя ошибка сервера
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "INTERNAL_ERROR"
+            message: "An unexpected error occurred"
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          description: Машиночитаемый код ошибки
+          example: NOT_FOUND
+        message:
+          type: string
+          description: Человекочитаемое описание ошибки
+          example: Resource not found
+        details:
+          type: object
+          description: Дополнительная информация (необязательно)
+
+    DeviceStatus:
+      type: string
+      enum: [active, inactive, error, maintenance]
+
+    DeviceType:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: Smart Thermostat
+        category:
+          type: string
+          enum: [sensor, actuator, thermostat]
+        manufacturer:
+          type: string
+          example: Bosch
+
+    Device:
+      type: object
+      required: [id, name, type, house_id, location, serial_number, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: Термостат гостиной
+        type:
+          $ref: "#/components/schemas/DeviceType"
+        house_id:
+          type: string
+          format: uuid
+        location:
+          type: string
+          example: living_room
+        serial_number:
+          type: string
+          example: TH-2024-001
+        status:
+          $ref: "#/components/schemas/DeviceStatus"
+        firmware_version:
+          type: string
+          example: "2.1.0"
+        installed_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    DeviceListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Device"
+        pagination:
+          type: object
+          properties:
+            page:
+              type: integer
+            per_page:
+              type: integer
+            total:
+              type: integer
+
+    DeviceCreateRequest:
+      type: object
+      required: [name, type_id, house_id, location, serial_number]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        type_id:
+          type: string
+          format: uuid
+        house_id:
+          type: string
+          format: uuid
+        location:
+          type: string
+          example: bedroom
+        serial_number:
+          type: string
+          example: TH-2024-002
+        firmware_version:
+          type: string
+          example: "2.1.0"
+
+    DeviceStatusUpdateRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/DeviceStatus"
+        reason:
+          type: string
+          description: Причина смены статуса (опционально)
+          example: Плановое обслуживание
+
+    HeatingCommandRequest:
+      type: object
+      properties:
+        target_temperature:
+          type: number
+          format: float
+          minimum: 5
+          maximum: 35
+          description: Целевая температура в °C (опционально)
+          example: 22.5
+
+    HeatingStatusResponse:
+      type: object
+      required: [device_id, state, updated_at]
+      properties:
+        device_id:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum: [on, off]
+        target_temperature:
+          type: number
+          format: float
+          nullable: true
+          example: 22.5
+        current_temperature:
+          type: number
+          format: float
+          nullable: true
+          example: 21.3
+        command_id:
+          type: string
+          description: ID записи в журнале команд
+        updated_at:
+          type: string
+          format: date-time
+
+    TemperatureReading:
+      type: object
+      required: [device_id, location, value, unit, recorded_at]
+      properties:
+        device_id:
+          type: string
+          format: uuid
+        location:
+          type: string
+          example: living_room
+        value:
+          type: number
+          format: float
+          example: 22.5
+        unit:
+          type: string
+          example: "°C"
+        status:
+          type: string
+          enum: [ok, warning, critical]
+        recorded_at:
+          type: string
+          format: date-time
+
+    TemperatureHistoryResponse:
+      type: object
+      properties:
+        device_id:
+          type: string
+          format: uuid
+        location:
+          type: string
+        interval:
+          type: string
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              bucket:
+                type: string
+                format: date-time
+              avg:
+                type: number
+                format: float
+              min:
+                type: number
+                format: float
+              max:
+                type: number
+                format: float
+              unit:
+                type: string
+
+    Alert:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        device_id:
+          type: string
+          format: uuid
+        location:
+          type: string
+        type:
+          type: string
+          enum: [temperature_high, temperature_low, device_offline, error]
+        message:
+          type: string
+        value:
+          type: number
+          format: float
+        threshold:
+          type: number
+          format: float
+        is_resolved:
+          type: boolean
+        triggered_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true

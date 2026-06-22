@@ -91,9 +91,6 @@ Rel(smarthome, postgres, "TCP / pgx")
 @enduml
 ```
 
-> Для рендеринга откройте `c4-context.puml` в VS Code с расширением PlantUML  
-> или вставьте содержимое на [plantuml.com/plantuml](https://www.plantuml.com/plantuml/uml).
-
 ---
 
 # Задание 2. Проектирование микросервисной архитектуры
@@ -201,5 +198,263 @@ Kafka → Device Management Service → Device DB  (синхронизация �
 Ключевое решение: ответ пользователю не ждёт синхронизации в Device Management —
 это устраняет связанность и повышает отказоустойчивость.
 
-> Для рендеринга откройте `.puml`-файлы в VS Code с расширением PlantUML  
+---
+
+# Задание 3. Разработка ER-диаграммы
+
+## 1. Идентификация сущностей
+
+| Сущность                           | Bounded Context        | Назначение                                           |
+| ---------------------------------- | ---------------------- | ---------------------------------------------------- |
+| **User** (Пользователь)            | Общий                  | Владелец или гость умного дома                       |
+| **House** (Дом)                    | Device Management      | Физический дом, к которому привязаны устройства      |
+| **UserHouseAccess**                | Device Management      | Таблица доступа (many-to-many User ↔ House)          |
+| **DeviceType** (Тип устройства)    | Device Management      | Справочник типов: датчик, актуатор, термостат        |
+| **Device** (Устройство)            | Device Management      | Конкретное физическое устройство в доме              |
+| **Module** (Модуль)                | Heating / Monitoring   | Функциональный модуль устройства (отопление, датчик) |
+| **HeatingSchedule** (Расписание)   | Heating Control        | Расписание автоматического включения отопления       |
+| **HeatingCommand** (Журнал команд) | Heating Control        | Аудит-лог всех команд управления отоплением          |
+| **TelemetryData** (Телеметрия)     | Temperature Monitoring | Временной ряд показаний датчиков (TimescaleDB)       |
+| **Alert** (Алерт)                  | Temperature Monitoring | Уведомления при выходе показаний за пороги           |
+
+## 2. Атрибуты ключевых сущностей
+
+### Device (Устройство)
+
+| Поле               | Тип                 | Описание                                |
+| ------------------ | ------------------- | --------------------------------------- |
+| `id`               | UUID PK             | Уникальный идентификатор                |
+| `type_id`          | UUID FK→DeviceType  | Тип устройства                          |
+| `house_id`         | UUID FK→House       | Дом, которому принадлежит устройство    |
+| `name`             | VARCHAR(100)        | Пользовательское название               |
+| `serial_number`    | VARCHAR(100) UNIQUE | Серийный номер                          |
+| `location`         | VARCHAR(100)        | Комната / зона в доме                   |
+| `status`           | ENUM                | active / inactive / error / maintenance |
+| `firmware_version` | VARCHAR(50)         | Версия прошивки                         |
+
+### TelemetryData (Телеметрия)
+
+| Поле          | Тип            | Описание                                    |
+| ------------- | -------------- | ------------------------------------------- |
+| `id`          | UUID PK        | Уникальный идентификатор записи             |
+| `device_id`   | UUID FK→Device | Устройство-источник                         |
+| `module_id`   | UUID FK→Module | Конкретный модуль устройства                |
+| `metric`      | VARCHAR(50)    | Название метрики (temperature, humidity)    |
+| `value`       | DECIMAL(10,4)  | Числовое значение                           |
+| `unit`        | VARCHAR(20)    | Единица измерения (°C, %, Pa)               |
+| `recorded_at` | TIMESTAMPTZ    | Временная метка (ключ партиции TimescaleDB) |
+
+## 3. Связи между сущностями
+
+| Связь                    | Тип   | Описание                                               |
+| ------------------------ | ----- | ------------------------------------------------------ |
+| User → House             | 1 : M | Один пользователь владеет несколькими домами           |
+| User ↔ House             | M : M | Доступ к дому через `UserHouseAccess` (owner/guest)    |
+| House → Device           | 1 : M | Один дом содержит много устройств                      |
+| DeviceType → Device      | 1 : M | Один тип описывает много устройств                     |
+| Device → Module          | 1 : M | Одно устройство имеет один или несколько модулей       |
+| Module → HeatingSchedule | 1 : M | Один модуль отопления может иметь несколько расписаний |
+| Module → HeatingCommand  | 1 : M | Журнал всех команд, отправленных на модуль             |
+| User → HeatingCommand    | 1 : M | Пользователь, выдавший команду                         |
+| Device → TelemetryData   | 1 : M | Устройство генерирует поток телеметрии                 |
+| Module → TelemetryData   | 1 : M | Конкретный модуль — источник метрики                   |
+| Device → Alert           | 1 : M | Устройство может порождать множество алертов           |
+| Module → Alert           | 1 : M | Алерт привязан к конкретному модулю                    |
+
+## 4. ER-диаграмма (PlantUML)
+
+Файл: [`docs/er-diagram.puml`](er-diagram.puml)
+
+> Для рендеринга откройте `er-diagram.puml` в VS Code с расширением PlantUML  
 > или вставьте содержимое на [plantuml.com](https://www.plantuml.com/plantuml/uml).
+
+---
+
+# Задание 4. Создание и документирование API
+
+## 1. Выбор типов API
+
+| Тип          | Когда используется                                                | Инструмент   |
+| ------------ | ----------------------------------------------------------------- | ------------ |
+| **REST API** | Синхронные запросы пользователя к микросервисам через API Gateway | OpenAPI 3.0  |
+| **AsyncAPI** | Асинхронный обмен событиями между микросервисами через Kafka      | AsyncAPI 2.6 |
+
+---
+
+## 2. REST API — Device Management Service
+
+**Файл:** [`docs/api/openapi.yaml`](api/openapi.yaml)
+
+| Метод   | Путь                          | Описание                                                       |
+| ------- | ----------------------------- | -------------------------------------------------------------- |
+| `GET`   | `/api/v1/devices`             | Получить список устройств (фильтр по дому, статусу, пагинация) |
+| `POST`  | `/api/v1/devices`             | Зарегистрировать новое устройство → публикует `device.created` |
+| `GET`   | `/api/v1/devices/{id}`        | Получить устройство по UUID                                    |
+| `PATCH` | `/api/v1/devices/{id}/status` | Обновить статус устройства → публикует `device.updated`        |
+
+### Контракт: POST /api/v1/devices
+
+**Запрос:**
+
+```json
+{
+  "name": "Термостат спальни",
+  "type_id": "7d2b3c1e-f1a2-4b56-8c9d-0e1f2a3b4c5d",
+  "house_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "location": "bedroom",
+  "serial_number": "TH-2024-002",
+  "firmware_version": "2.1.0"
+}
+```
+
+**Ответ 201:**
+
+```json
+{
+  "id": "660f9511-f30c-52e5-b827-557766551111",
+  "name": "Термостат спальни",
+  "type": { "id": "...", "name": "Smart Thermostat", "category": "thermostat" },
+  "house_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "location": "bedroom",
+  "serial_number": "TH-2024-002",
+  "status": "inactive",
+  "firmware_version": "2.1.0",
+  "installed_at": "2026-06-22T12:00:00Z"
+}
+```
+
+| Код   | Ситуация                       |
+| ----- | ------------------------------ |
+| `201` | Устройство создано             |
+| `400` | Невалидное тело запроса        |
+| `401` | Отсутствует / невалидный JWT   |
+| `409` | `serial_number` уже существует |
+| `500` | Внутренняя ошибка сервера      |
+
+---
+
+## 3. REST API — Heating Control Service
+
+| Метод  | Путь                                 | Описание                                             |
+| ------ | ------------------------------------ | ---------------------------------------------------- |
+| `POST` | `/api/v1/heating/{device_id}/on`     | Включить отопление → публикует `heating.turned_on`   |
+| `POST` | `/api/v1/heating/{device_id}/off`    | Выключить отопление → публикует `heating.turned_off` |
+| `GET`  | `/api/v1/heating/{device_id}/status` | Текущее состояние отопления                          |
+
+### Контракт: POST /api/v1/heating/{device_id}/on
+
+**Запрос (опционально):**
+
+```json
+{ "target_temperature": 22.5 }
+```
+
+**Ответ 200:**
+
+```json
+{
+  "device_id": "550e8400-e29b-41d4-a716-446655440000",
+  "state": "on",
+  "target_temperature": 22.5,
+  "command_id": "cmd-abc123",
+  "updated_at": "2026-06-22T14:30:00Z"
+}
+```
+
+| Код   | Ситуация                  |
+| ----- | ------------------------- |
+| `200` | Команда выполнена         |
+| `404` | Устройство не найдено     |
+| `409` | Отопление уже включено    |
+| `500` | Ошибка выполнения команды |
+
+---
+
+## 4. REST API — Temperature Monitoring Service
+
+| Метод | Путь                                      | Описание                              |
+| ----- | ----------------------------------------- | ------------------------------------- |
+| `GET` | `/api/v1/temperature/{location}`          | Текущая температура по местоположению |
+| `GET` | `/api/v1/temperature/history/{device_id}` | История показаний (с агрегацией)      |
+| `GET` | `/api/v1/temperature/alerts`              | Активные алерты по температуре        |
+
+### Контракт: GET /api/v1/temperature/history/{device_id}
+
+**Query-параметры:** `from`, `to` (ISO 8601), `interval` (`raw` / `1m` / `5m` / `1h` / `1d`)
+
+**Ответ 200:**
+
+```json
+{
+  "device_id": "550e8400-e29b-41d4-a716-446655440000",
+  "location": "living_room",
+  "interval": "5m",
+  "data": [
+    {
+      "bucket": "2026-06-22T14:00:00Z",
+      "avg": 22.4,
+      "min": 21.9,
+      "max": 22.8,
+      "unit": "°C"
+    },
+    {
+      "bucket": "2026-06-22T14:05:00Z",
+      "avg": 22.5,
+      "min": 22.1,
+      "max": 22.9,
+      "unit": "°C"
+    }
+  ]
+}
+```
+
+---
+
+## 5. AsyncAPI — Kafka Event Bus
+
+**Файл:** [`docs/api/asyncapi.yaml`](api/asyncapi.yaml)
+
+| Топик                 | Producer               | Consumers                               | Payload                   |
+| --------------------- | ---------------------- | --------------------------------------- | ------------------------- |
+| `device.created`      | Device Management      | Heating Control, Temperature Monitoring | DeviceCreatedPayload      |
+| `device.updated`      | Device Management      | Heating Control, Temperature Monitoring | DeviceUpdatedPayload      |
+| `heating.turned_on`   | Heating Control        | Device Management                       | HeatingCommandPayload     |
+| `heating.turned_off`  | Heating Control        | Device Management                       | HeatingCommandPayload     |
+| `temperature.reading` | Temperature Monitoring | (будущая аналитика)                     | TemperatureReadingPayload |
+| `temperature.alert`   | Temperature Monitoring | (будущие нотификации)                   | TemperatureAlertPayload   |
+
+### Контракт: temperature.alert
+
+**Заголовки Kafka-сообщения:**
+
+```json
+{
+  "event_id": "d4e5f6a7-b8c9-0123-4567-890123def012",
+  "event_type": "temperature.alert",
+  "source": "temperature-monitoring-service",
+  "severity": "warning",
+  "timestamp": "2026-06-22T03:15:00Z"
+}
+```
+
+**Payload:**
+
+```json
+{
+  "alert_id": "alert-uuid-001",
+  "device_id": "550e8400-e29b-41d4-a716-446655440000",
+  "house_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "location": "bedroom",
+  "alert_type": "temperature_low",
+  "value": 16.5,
+  "threshold": 18.0,
+  "unit": "°C",
+  "message": "Temperature in bedroom dropped below 18°C",
+  "triggered_at": "2026-06-22T03:15:00Z"
+}
+```
+
+> **Рендеринг документации:**
+>
+> - OpenAPI: вставьте `openapi.yaml` на [editor.swagger.io](https://editor.swagger.io)
+> - AsyncAPI: вставьте `asyncapi.yaml` на [studio.asyncapi.com](https://studio.asyncapi.com)
