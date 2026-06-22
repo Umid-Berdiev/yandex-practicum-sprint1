@@ -1,0 +1,60 @@
+@startuml C4_Components_TemperatureMonitoring
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+
+title C4 Component Diagram — Temperature Monitoring Service
+
+' ──────────────────────────────────────────
+' External actors / containers
+' ──────────────────────────────────────────
+Container_Ext(api_gateway, "API Gateway", "Go / nginx", "Маршрутизирует входящие запросы")
+ContainerDb_Ext(monitoring_db, "Temperature DB", "TimescaleDB", "Временные ряды показаний")
+Container_Ext(broker, "Message Broker", "Apache Kafka", "Асинхронные события")
+System_Ext(ext_temp_api, "External Temperature API", "Сторонний IoT-сервис\nпоказаний температуры")
+
+' ──────────────────────────────────────────
+' Temperature Monitoring Service boundary
+' ──────────────────────────────────────────
+Container_Boundary(monitoring_svc, "Temperature Monitoring Service") {
+
+    Component(api_handler, "REST API Handler", "Gin HTTP Handler", "Принимает HTTP-запросы.\nМаршруты:\nGET /temperature/:location\nGET /temperature/history/:id\nGET /temperature/alerts")
+
+    Component(collector, "Temperature Collector", "Go / cron-goroutine", "Периодически опрашивает\nExternal Temperature API\nдля каждого зарегистрированного\nдатчика. Паттерн Polling.")
+
+    Component(aggregator, "Data Aggregator", "Go Service", "Вычисляет агрегаты:\nсреднее, мин/макс за период.\nОтвечает на исторические запросы.")
+
+    Component(alert_manager, "Alert Manager", "Go Service", "Сравнивает показания с\nпороговыми значениями.\nГенерирует temperature.alert\nпри выходе за пределы нормы.")
+
+    Component(event_consumer, "Event Consumer", "Kafka Consumer", "Подписывается на device.created\nот Device Management Service.\nРегистрирует новые датчики\nдля polling.")
+
+    Component(event_publisher, "Event Publisher", "Kafka Producer", "Публикует temperature.reading,\ntemperature.alert в Kafka.")
+
+    Component(temp_repo, "Temperature Repository", "Go / pgx", "Инкапсулирует запросы\nк TimescaleDB.\nПоддержка time-range запросов\nи гипертаблиц.")
+}
+
+' ──────────────────────────────────────────
+' Relationships
+' ──────────────────────────────────────────
+Rel(api_gateway, api_handler, "HTTP запросы", "REST / JSON")
+
+Rel(api_handler, aggregator, "Запрашивает показания / историю", "Go function call")
+Rel(api_handler, alert_manager, "Запрашивает активные алерты", "Go function call")
+
+Rel(collector, ext_temp_api, "Polling температур", "HTTP GET / периодически")
+Rel(collector, temp_repo, "Сохраняет показание", "Go function call")
+Rel(collector, alert_manager, "Передаёт новое показание", "Go function call")
+Rel(collector, event_publisher, "Публикует temperature.reading", "Go function call")
+
+Rel(aggregator, temp_repo, "Читает временные ряды", "Go function call")
+
+Rel(alert_manager, event_publisher, "Публикует temperature.alert", "Go function call")
+
+Rel(event_consumer, broker, "Подписывается на device.created", "Kafka Consumer API")
+Rel(event_consumer, collector, "Регистрирует новый датчик", "Go function call")
+
+Rel(event_publisher, broker, "Отправляет события", "Kafka Producer API")
+Rel(temp_repo, monitoring_db, "SELECT / INSERT", "TCP / pgx")
+
+@enduml

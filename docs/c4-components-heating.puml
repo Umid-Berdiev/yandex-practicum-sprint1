@@ -1,0 +1,59 @@
+@startuml C4_Components_HeatingControl
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+
+title C4 Component Diagram — Heating Control Service
+
+' ──────────────────────────────────────────
+' External actors / containers
+' ──────────────────────────────────────────
+Container_Ext(api_gateway, "API Gateway", "Go / nginx", "Маршрутизирует входящие запросы")
+ContainerDb_Ext(heating_db, "Heating DB", "PostgreSQL", "Состояния и журнал команд")
+Container_Ext(broker, "Message Broker", "Apache Kafka", "Асинхронные события")
+
+' ──────────────────────────────────────────
+' Heating Control Service boundary
+' ──────────────────────────────────────────
+Container_Boundary(heating_svc, "Heating Control Service") {
+
+    Component(api_handler, "REST API Handler", "Gin HTTP Handler", "Принимает HTTP-запросы.\nМаршруты:\nPOST /heating/:id/on\nPOST /heating/:id/off\nGET  /heating/:id/status\nGET  /heating/schedule")
+
+    Component(cmd_handler, "Heating Command Handler", "Go Service", "Обрабатывает команды включения\n/ выключения отопления.\nПроверяет доступность устройства.\nСоздаёт запись в журнале команд.")
+
+    Component(schedule_manager, "Schedule Manager", "Go Service / Cron", "Управляет расписаниями включения\nотопления. Периодически генерирует\nкоманды по cron-правилам.")
+
+    Component(state_manager, "Heating State Manager", "Go Service", "Хранит текущее состояние\nкаждого устройства отопления.\nОбрабатывает переходы:\noff → on → off.")
+
+    Component(event_consumer, "Event Consumer", "Kafka Consumer", "Подписывается на device.created,\ndevice.updated от Device\nManagement Service.\nСинхронизирует реестр устройств.")
+
+    Component(event_publisher, "Event Publisher", "Kafka Producer", "Публикует heating.turned_on,\nheating.turned_off,\nheating.command_failed.")
+
+    Component(heating_repo, "Heating Repository", "Go / pgx", "Инкапсулирует SQL-запросы.\nХранит состояния устройств\nи журнал команд (audit log).")
+}
+
+' ──────────────────────────────────────────
+' Relationships
+' ──────────────────────────────────────────
+Rel(api_gateway, api_handler, "HTTP запросы", "REST / JSON")
+
+Rel(api_handler, cmd_handler, "Передаёт команду", "Go function call")
+Rel(api_handler, state_manager, "Запрашивает текущий статус", "Go function call")
+Rel(api_handler, schedule_manager, "CRUD расписаний", "Go function call")
+
+Rel(cmd_handler, state_manager, "Меняет состояние устройства", "Go function call")
+Rel(cmd_handler, heating_repo, "Сохраняет команду в журнал", "Go function call")
+Rel(cmd_handler, event_publisher, "Публикует результат команды", "Go function call")
+
+Rel(schedule_manager, cmd_handler, "Запускает команду по расписанию", "Go function call")
+
+Rel(state_manager, heating_repo, "Читает / обновляет состояние", "Go function call")
+
+Rel(event_consumer, broker, "Подписывается на топики", "Kafka Consumer API")
+Rel(event_consumer, state_manager, "Регистрирует новые устройства", "Go function call")
+
+Rel(event_publisher, broker, "Отправляет события", "Kafka Producer API")
+Rel(heating_repo, heating_db, "SELECT / INSERT / UPDATE", "TCP / pgx")
+
+@enduml

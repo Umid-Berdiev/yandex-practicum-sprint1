@@ -1,0 +1,73 @@
+@startuml C4_Containers_SmartHome
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+title C4 Container Diagram — Smart Home Microservices (To-Be)
+
+' ──────────────────────────────────────────
+' Persons
+' ──────────────────────────────────────────
+Person(user, "Пользователь", "Владелец умного дома.\nУправляет отоплением и\nпросматривает температуру.")
+
+' ──────────────────────────────────────────
+' External Systems
+' ──────────────────────────────────────────
+System_Ext(temperature_api, "External Temperature API", "Сторонний сервис.\nПредоставляет актуальные\nпоказания температуры\nс IoT-датчиков.")
+
+' ──────────────────────────────────────────
+' Smart Home System boundary
+' ──────────────────────────────────────────
+System_Boundary(smarthome, "Smart Home System") {
+
+    ' ── API Gateway ──────────────────────
+    Container(api_gateway, "API Gateway", "Go / nginx", "Единая точка входа.\nМаршрутизация запросов,\nаутентификация, rate-limiting.")
+
+    ' ── Microservices ────────────────────
+    Container(device_svc, "Device Management Service", "Go, REST API", "Управление метаданными\nустройств и датчиков.\nCRUD операции.")
+
+    Container(heating_svc, "Heating Control Service", "Go, REST API", "Управление отоплением.\nВключение / выключение\nотопительных устройств.\nАвтоматизация по расписанию.")
+
+    Container(monitoring_svc, "Temperature Monitoring Service", "Go, REST API", "Сбор и хранение показаний\nтемпературы. Агрегация,\nуведомления о выходе\nза пороговые значения.")
+
+    ' ── Message Broker ───────────────────
+    Container(broker, "Message Broker", "Apache Kafka", "Асинхронный обмен\nсообщениями между\nмикросервисами.\nТопики событий.")
+
+    ' ── Databases ────────────────────────
+    ContainerDb(device_db, "Device DB", "PostgreSQL", "Метаданные устройств:\nID, название, тип,\nместоположение, статус.")
+
+    ContainerDb(heating_db, "Heating DB", "PostgreSQL", "Состояния и расписания\nотопительных устройств.\nЖурнал команд.")
+
+    ContainerDb(monitoring_db, "Temperature DB", "TimescaleDB / PostgreSQL", "Временные ряды показаний\nтемпературы. Поддержка\nзапросов по периодам.")
+}
+
+' ──────────────────────────────────────────
+' Relationships — User → Gateway → Services
+' ──────────────────────────────────────────
+Rel(user, api_gateway, "Управляет устройствами,\nсмотрит температуру", "HTTPS / REST JSON")
+
+Rel(api_gateway, device_svc, "CRUD устройств", "HTTP / REST")
+Rel(api_gateway, heating_svc, "Команды отопления", "HTTP / REST")
+Rel(api_gateway, monitoring_svc, "Запросы температуры", "HTTP / REST")
+
+' ──────────────────────────────────────────
+' Relationships — Services ↔ DBs
+' ──────────────────────────────────────────
+Rel(device_svc, device_db, "Читает / пишет", "TCP / pgx")
+Rel(heating_svc, heating_db, "Читает / пишет", "TCP / pgx")
+Rel(monitoring_svc, monitoring_db, "Читает / пишет", "TCP / pgx")
+
+' ──────────────────────────────────────────
+' Relationships — Async via Kafka
+' ──────────────────────────────────────────
+Rel(device_svc, broker, "Публикует device.created,\ndevice.updated", "Kafka Producer")
+Rel(heating_svc, broker, "Публикует heating.command,\nПотребляет device.created", "Kafka Producer/Consumer")
+Rel(monitoring_svc, broker, "Публикует temperature.alert,\nПотребляет device.created", "Kafka Producer/Consumer")
+
+' ──────────────────────────────────────────
+' Relationships — External Temperature API
+' ──────────────────────────────────────────
+Rel(monitoring_svc, temperature_api, "Polling показаний по ID датчика", "HTTP GET (периодически)")
+
+@enduml

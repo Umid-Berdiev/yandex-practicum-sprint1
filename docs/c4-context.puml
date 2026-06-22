@@ -1,0 +1,39 @@
+@startuml C4_Context_SmartHome
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+LAYOUT_WITH_LEGEND()
+
+title C4 Context Diagram — Smart Home System (Monolith)
+
+' ──────────────────────────────────────────
+' Persons / External Actors
+' ──────────────────────────────────────────
+Person(user, "Пользователь", "Владелец умного дома.\nПросматривает температуру,\nуправляет отоплением через\nвеб-интерфейс.")
+
+' ──────────────────────────────────────────
+' System under focus
+' ──────────────────────────────────────────
+System(smarthome, "Smart Home Monolith", "Монолитное Go-приложение.\nУправление датчиками,\nмониторинг температуры,\nуправление отоплением.\nREST API (Gin), PostgreSQL.")
+
+' ──────────────────────────────────────────
+' External Systems
+' ──────────────────────────────────────────
+System_Ext(temperature_api, "Temperature API", "Внешний сервис показаний\nтемпературы (http://temperature-api:8081).\nВозвращает текущее значение,\nединицу измерения и статус датчика.")
+
+System_Ext(sensors, "IoT Temperature Sensors", "Физические датчики температуры,\nустановленные в домах пользователей.\nПередают данные в Temperature API.")
+
+System_Ext(postgres, "PostgreSQL", "Реляционная база данных.\nХранит метаданные датчиков:\nназвание, тип, местоположение,\nпоследнее значение, статус.")
+
+' ──────────────────────────────────────────
+' Relationships
+' ──────────────────────────────────────────
+Rel(user, smarthome, "Просматривает температуру,\nвключает / выключает отопление", "HTTPS / REST JSON")
+
+Rel(smarthome, temperature_api, "Запрашивает актуальные показания\nтемпературы по ID датчика\nили местоположению", "HTTP GET (синхронно)")
+
+Rel(temperature_api, sensors, "Опрашивает показания", "IoT / MQTT / HTTP")
+
+Rel(smarthome, postgres, "Читает и сохраняет\nметаданные датчиков", "TCP / pgx driver")
+
+@enduml
