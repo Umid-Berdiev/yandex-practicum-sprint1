@@ -1,0 +1,76 @@
+@startuml Sequence_TurnOnHeating
+title Sequence Diagram — Включение отопления (Turn On Heating)
+
+actor "Пользователь" as User
+participant "API Gateway" as GW
+participant "Heating Control\nService" as HeatSvc
+participant "Heating\nRepository" as HeatRepo
+database "Heating DB\n(PostgreSQL)" as HeatDB
+participant "Event Publisher\n(Kafka Producer)" as Publisher
+queue "Kafka\nheating.turned_on" as Kafka
+participant "Device Management\nService" as DevSvc
+database "Device DB\n(PostgreSQL)" as DevDB
+
+== Команда включения отопления ==
+
+User -> GW : POST /api/v1/heating/{id}/on\n(Authorization: Bearer <token>)
+activate GW
+
+GW -> GW : Аутентификация токена\nМаршрутизация запроса
+GW -> HeatSvc : POST /heating/{id}/on
+activate HeatSvc
+
+HeatSvc -> HeatRepo : GetDeviceState(deviceID)
+activate HeatRepo
+HeatRepo -> HeatDB : SELECT state FROM heating_devices\nWHERE id = $1
+HeatDB --> HeatRepo : {state: "off", enabled: true}
+HeatRepo --> HeatSvc : HeatingDevice{state: off}
+deactivate HeatRepo
+
+alt Устройство уже включено
+    HeatSvc --> GW : 409 Conflict {"error": "already on"}
+    GW --> User : 409 Conflict
+else Устройство доступно
+    HeatSvc -> HeatRepo : SaveCommand(deviceID, "turn_on")
+    activate HeatRepo
+    HeatRepo -> HeatDB : INSERT INTO heating_commands\n(device_id, command, status, created_at)
+    HeatDB --> HeatRepo : OK
+    HeatRepo --> HeatSvc : commandID
+    deactivate HeatRepo
+
+    HeatSvc -> HeatRepo : UpdateState(deviceID, "on")
+    activate HeatRepo
+    HeatRepo -> HeatDB : UPDATE heating_devices\nSET state = 'on',\nupdated_at = NOW()\nWHERE id = $1
+    HeatDB --> HeatRepo : OK
+    HeatRepo --> HeatSvc : OK
+    deactivate HeatRepo
+
+    HeatSvc -> Publisher : Publish(heating.turned_on, {deviceID, state: "on"})
+    activate Publisher
+    Publisher -> Kafka : Produce(topic="heating.turned_on",\nkey=deviceID,\npayload={id, state, timestamp})
+    Kafka --> Publisher : ack
+    Publisher --> HeatSvc : OK
+    deactivate Publisher
+
+    HeatSvc --> GW : 200 OK\n{"id": id, "state": "on", "updated_at": ...}
+    GW --> User : 200 OK
+end
+
+deactivate HeatSvc
+deactivate GW
+
+== Асинхронная синхронизация (Device Management) ==
+
+Kafka -> DevSvc : Consume(topic="heating.turned_on")
+activate DevSvc
+DevSvc -> DevDB : UPDATE devices SET status = 'active'\nWHERE id = $1
+DevDB --> DevSvc : OK
+deactivate DevSvc
+
+note over Kafka, DevSvc
+    Device Management Service синхронизирует
+    глобальный статус устройства асинхронно,
+    не блокируя ответ пользователю.
+end note
+
+@enduml

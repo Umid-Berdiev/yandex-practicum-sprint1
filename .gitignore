@@ -192,3 +192,7 @@ build/
 
 tmp/
 task-*
+
+# Environment files with secrets
+.env
+apps/.env

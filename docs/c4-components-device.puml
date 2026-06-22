@@ -1,0 +1,49 @@
+@startuml C4_Components_DeviceManagement
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+
+title C4 Component Diagram — Device Management Service
+
+' ──────────────────────────────────────────
+' External actors / containers
+' ──────────────────────────────────────────
+Container_Ext(api_gateway, "API Gateway", "Go / nginx", "Маршрутизирует входящие запросы")
+ContainerDb_Ext(device_db, "Device DB", "PostgreSQL", "Хранит метаданные устройств")
+Container_Ext(broker, "Message Broker", "Apache Kafka", "Асинхронные события")
+
+' ──────────────────────────────────────────
+' Device Management Service boundary
+' ──────────────────────────────────────────
+Container_Boundary(device_svc, "Device Management Service") {
+
+    Component(api_handler, "REST API Handler", "Gin HTTP Handler", "Принимает HTTP-запросы.\nВалидирует входные данные.\nВозвращает JSON-ответы.\nМаршруты: GET/POST/PUT/DELETE /devices")
+
+    Component(device_cmd_handler, "Device Command Handler", "Go Service", "Оркестрирует бизнес-операции:\nсоздание, обновление, удаление\nустройств. Применяет\nбизнес-правила и инварианты.")
+
+    Component(state_manager, "Device State Manager", "Go Service", "Управляет жизненным циклом\nустройства: active, inactive,\nerror. Валидирует переходы\nмежду состояниями.")
+
+    Component(device_repo, "Device Repository", "Go / pgx", "Инкапсулирует SQL-запросы.\nCRUD операции с таблицей devices.\nПаттерн Repository.")
+
+    Component(event_publisher, "Event Publisher", "Kafka Producer", "Публикует доменные события:\ndevice.created, device.updated,\ndevice.deleted — в Kafka-топики.")
+}
+
+' ──────────────────────────────────────────
+' Relationships
+' ──────────────────────────────────────────
+Rel(api_gateway, api_handler, "HTTP запросы", "REST / JSON")
+
+Rel(api_handler, device_cmd_handler, "Вызывает команды", "Go function call")
+Rel(api_handler, state_manager, "Запрашивает / меняет статус", "Go function call")
+
+Rel(device_cmd_handler, device_repo, "Читает / сохраняет устройства", "Go function call")
+Rel(device_cmd_handler, event_publisher, "Публикует событие после\nуспешной операции", "Go function call")
+
+Rel(state_manager, device_repo, "Обновляет статус устройства", "Go function call")
+Rel(state_manager, event_publisher, "Публикует device.updated", "Go function call")
+
+Rel(device_repo, device_db, "SELECT / INSERT / UPDATE / DELETE", "TCP / pgx")
+Rel(event_publisher, broker, "Отправляет события", "Kafka Producer API")
+
+@enduml

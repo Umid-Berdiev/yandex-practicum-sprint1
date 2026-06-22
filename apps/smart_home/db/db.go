@@ -52,7 +52,7 @@ func (db *DB) GetSensors(ctx context.Context) ([]models.Sensor, error) {
 	}
 	defer rows.Close()
 
-	var sensors []models.Sensor
+	sensors := make([]models.Sensor, 0)
 	for rows.Next() {
 		var s models.Sensor
 		err := rows.Scan(

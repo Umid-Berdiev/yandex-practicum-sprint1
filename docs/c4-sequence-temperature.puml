@@ -1,0 +1,73 @@
+@startuml Sequence_TemperatureReading
+title Sequence Diagram — Получение температуры (Get Temperature)
+
+actor "Пользователь" as User
+participant "API Gateway" as GW
+participant "Temperature\nMonitoring Service" as TempSvc
+participant "Data Aggregator" as Aggregator
+participant "Temperature\nRepository" as TempRepo
+database "Temperature DB\n(TimescaleDB)" as TempDB
+
+== Запрос текущей температуры ==
+
+User -> GW : GET /api/v1/temperature/{location}
+activate GW
+GW -> TempSvc : GET /temperature/{location}
+activate TempSvc
+
+TempSvc -> Aggregator : GetLatestReading(location)
+activate Aggregator
+Aggregator -> TempRepo : FindLatestByLocation(location)
+activate TempRepo
+TempRepo -> TempDB : SELECT value, unit, timestamp\nFROM temperature_readings\nWHERE location = $1\nORDER BY timestamp DESC LIMIT 1
+TempDB --> TempRepo : {value: 22.5, unit: "°C", timestamp: ...}
+TempRepo --> Aggregator : TemperatureReading{...}
+deactivate TempRepo
+Aggregator --> TempSvc : TemperatureReading{...}
+deactivate Aggregator
+
+TempSvc --> GW : 200 OK\n{"location": "living_room",\n "value": 22.5, "unit": "°C",\n "timestamp": "..."}
+GW --> User : 200 OK
+deactivate TempSvc
+deactivate GW
+
+== Фоновый polling (Temperature Collector) ==
+
+participant "Temperature\nCollector" as Collector
+participant "Alert Manager" as Alert
+participant "Event Publisher" as Publisher
+queue "Kafka\ntemperature.reading" as Kafka
+participant "External\nTemperature API" as ExtAPI
+
+note over Collector
+    Каждые N секунд (cron-горутина)
+    для каждого зарегистрированного датчика:
+end note
+
+Collector -> ExtAPI : GET /temperature/{sensorID}
+activate Collector
+activate ExtAPI
+ExtAPI --> Collector : {value: 23.1, unit: "°C", status: "ok"}
+deactivate ExtAPI
+
+Collector -> TempRepo : SaveReading(sensorID, value, timestamp)
+activate TempRepo
+TempRepo -> TempDB : INSERT INTO temperature_readings\n(sensor_id, location, value, unit, timestamp)
+TempDB --> TempRepo : OK
+TempRepo --> Collector : OK
+deactivate TempRepo
+
+Collector -> Alert : CheckThresholds(sensorID, value)
+activate Alert
+alt Значение вне нормы (< 18°C или > 30°C)
+    Alert -> Publisher : Publish(temperature.alert, {sensorID, value})
+    Publisher -> Kafka : Produce(topic="temperature.alert")
+end
+Alert --> Collector : OK
+deactivate Alert
+
+Collector -> Publisher : Publish(temperature.reading, {sensorID, value, timestamp})
+Publisher -> Kafka : Produce(topic="temperature.reading")
+deactivate Collector
+
+@enduml
