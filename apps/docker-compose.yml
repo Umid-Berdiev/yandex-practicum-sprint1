@@ -3,8 +3,9 @@ services:
     image: postgres:16-alpine
     container_name: smarthome-postgres
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./smart_home/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -38,8 +39,8 @@ services:
       temperature-api:
         condition: service_started
     environment:
-      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/smarthome
-      - TEMPERATURE_API_URL=http://temperature-api:8081
+      - DATABASE_URL=${DATABASE_URL}
+      - TEMPERATURE_API_URL=${TEMPERATURE_API_URL}
     ports:
       - "8080:8080"
     restart: unless-stopped
